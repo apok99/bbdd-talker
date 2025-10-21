@@ -10,7 +10,10 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->singleton(DatabaseAwareChatService::class, function ($app) {
-            return new DatabaseAwareChatService($app['db']->connection());
+            return new DatabaseAwareChatService(
+                $app['db'],
+                $app['config']['database.default']
+            );
         });
     }
 

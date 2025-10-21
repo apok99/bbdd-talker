@@ -3,6 +3,7 @@
 namespace App\Services\Chat;
 
 use Illuminate\Database\ConnectionInterface;
+use Illuminate\Database\ConnectionResolverInterface;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Http;
@@ -12,13 +13,17 @@ use Throwable;
 
 class DatabaseAwareChatService
 {
-    public function __construct(private readonly ConnectionInterface $connection)
-    {
+    public function __construct(
+        private readonly ConnectionResolverInterface $connections,
+        private readonly string $defaultConnection
+    ) {
     }
 
-    public function reply(string $prompt, array $history, string $schema): string
+    public function reply(string $prompt, array $history, string $database, string $schema): string
     {
-        $systemPrompt = $this->buildSystemPrompt($schema);
+        $connection = $this->connection($database);
+
+        $systemPrompt = $this->buildSystemPrompt($connection, $database, $schema);
 
         $messages = collect($history)
             ->map(fn (array $message) => [
@@ -45,7 +50,7 @@ class DatabaseAwareChatService
         $answer = data_get($response, 'message.content', '');
 
         if (Str::contains(Str::lower($answer), 'sql')) {
-            $execution = $this->executeSqlFromAnswer($answer);
+            $execution = $this->executeSqlFromAnswer($connection, $answer);
             if ($execution !== '') {
                 $answer .= "\n\n".$execution;
             }
@@ -54,12 +59,46 @@ class DatabaseAwareChatService
         return $answer;
     }
 
-    public function availableSchemas(): array
+    public function availableDatabases(): array
     {
-        $defaultSchema = Config::get('services.ollama.database_schema', 'public');
+        $connections = Config::get('database.connections', []);
+
+        return collect($connections)
+            ->mapWithKeys(function (array $config, string $name) {
+                $database = $config['database'] ?? $name;
+                $driver = $config['driver'] ?? null;
+                $label = $database;
+
+                if ($driver) {
+                    $label .= " ({$driver})";
+                }
+
+                return [$name => [
+                    'connection' => $name,
+                    'database' => $database,
+                    'label' => $label,
+                ]];
+            })
+            ->all();
+    }
+
+    public function defaultDatabase(): string
+    {
+        return $this->defaultConnection;
+    }
+
+    public function defaultSchema(): string
+    {
+        return Config::get('services.ollama.database_schema', 'public');
+    }
+
+    public function availableSchemas(string $database): array
+    {
+        $connection = $this->connection($database);
+        $defaultSchema = $this->defaultSchema();
 
         try {
-            $schemas = $this->connection->select(
+            $schemas = $connection->select(
                 "SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT LIKE 'pg_%' AND schema_name <> 'information_schema' ORDER BY schema_name"
             );
 
@@ -78,22 +117,26 @@ class DatabaseAwareChatService
         }
     }
 
-    public function availableTables(string $schema): array
+    public function availableTables(string $database, string $schema): array
     {
-        return $this->fetchTablesForSchema($schema);
+        $connection = $this->connection($database);
+
+        return $this->fetchTablesForSchema($connection, $schema);
     }
 
-    public function columnsForTable(string $schema, string $table): array
+    public function columnsForTable(string $database, string $schema, string $table): array
     {
-        return $this->fetchColumnsForTable($schema, $table);
+        $connection = $this->connection($database);
+
+        return $this->fetchColumnsForTable($connection, $schema, $table);
     }
 
-    private function buildSystemPrompt(string $schema): string
+    private function buildSystemPrompt(ConnectionInterface $connection, string $database, string $schema): string
     {
-        $tables = collect($this->fetchTablesForSchema($schema));
+        $tables = collect($this->fetchTablesForSchema($connection, $schema));
 
-        $tablesList = $tables->map(function (string $table) use ($schema) {
-            $columns = collect($this->fetchColumnsForTable($schema, $table));
+        $tablesList = $tables->map(function (string $table) use ($connection, $schema) {
+            $columns = collect($this->fetchColumnsForTable($connection, $schema, $table));
 
             if ($columns->isEmpty()) {
                 return "- {$table} (sin columnas detectadas)";
@@ -116,7 +159,7 @@ class DatabaseAwareChatService
         }
 
         return <<<PROMPT
-Eres un asistente experto en PostgreSQL. El usuario te pedirá información sobre la base de datos. Sigue siempre estos pasos:
+Eres un asistente experto en PostgreSQL. El usuario te pedirá información sobre la base de datos «{$database}». Sigue siempre estos pasos:
 1. Analiza la petición y diseña la consulta SQL más adecuada usando el esquema {$schema}.
 2. Devuelve la consulta dentro de un bloque ```sql```. Procura que sea segura y que limite resultados cuando tenga sentido.
 3. Ejecuta la consulta en la base de datos y muestra una tabla con los resultados o un resumen claro.
@@ -127,7 +170,7 @@ El esquema {$schema} contiene estas tablas:
 PROMPT;
     }
 
-    private function executeSqlFromAnswer(string $answer): string
+    private function executeSqlFromAnswer(ConnectionInterface $connection, string $answer): string
     {
         if (! preg_match('/```sql\s*(.*?)```/is', $answer, $matches)) {
             return '';
@@ -139,7 +182,7 @@ PROMPT;
             return 'Por seguridad, solo se ejecutan consultas de lectura.';
         }
 
-        $results = $this->connection->select($sql);
+        $results = $connection->select($sql);
 
         if (empty($results)) {
             return 'La consulta no devolvió resultados.';
@@ -157,10 +200,10 @@ PROMPT;
         return implode("\n", [$headerRow, $separator, ...$rows]);
     }
 
-    private function fetchTablesForSchema(string $schema): array
+    private function fetchTablesForSchema(ConnectionInterface $connection, string $schema): array
     {
         try {
-            $tables = $this->connection->select(
+            $tables = $connection->select(
                 'SELECT table_name FROM information_schema.tables WHERE table_schema = ? ORDER BY table_name',
                 [$schema]
             );
@@ -179,10 +222,10 @@ PROMPT;
         }
     }
 
-    private function fetchColumnsForTable(string $schema, string $table): array
+    private function fetchColumnsForTable(ConnectionInterface $connection, string $schema, string $table): array
     {
         try {
-            $columns = $this->connection->select(
+            $columns = $connection->select(
                 'SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position',
                 [$schema, $table]
             );
@@ -206,5 +249,10 @@ PROMPT;
 
             return [];
         }
+    }
+
+    private function connection(string $database): ConnectionInterface
+    {
+        return $this->connections->connection($database);
     }
 }
