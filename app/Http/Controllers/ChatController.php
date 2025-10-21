@@ -19,15 +19,42 @@ class ChatController extends Controller
     {
         $conversation = $request->session()->get('chat.conversation', []);
 
-        $selectedSchema = $request->session()->get(
-            'chat.schema',
-            Config::get('services.ollama.database_schema', 'public')
-        );
+        $availableSchemas = $this->chatService->availableSchemas();
+        $defaultSchema = Config::get('services.ollama.database_schema', 'public');
+
+        $selectedSchema = $request->query('schema', $request->session()->get('chat.schema', $defaultSchema));
+
+        if (! in_array($selectedSchema, $availableSchemas, true)) {
+            $selectedSchema = $defaultSchema;
+        }
+
+        $request->session()->put('chat.schema', $selectedSchema);
+
+        $tables = $this->chatService->availableTables($selectedSchema);
+
+        $selectedTable = $request->query('table', $request->session()->get('chat.table'));
+
+        if (! in_array($selectedTable, $tables, true)) {
+            $selectedTable = $tables[0] ?? null;
+        }
+
+        if ($selectedTable !== null) {
+            $request->session()->put('chat.table', $selectedTable);
+        } else {
+            $request->session()->forget('chat.table');
+        }
+
+        $tableColumns = $selectedTable
+            ? $this->chatService->columnsForTable($selectedSchema, $selectedTable)
+            : [];
 
         return view('chat', [
             'conversation' => $conversation,
-            'schemas' => $this->chatService->availableSchemas(),
+            'schemas' => $availableSchemas,
             'selectedSchema' => $selectedSchema,
+            'tables' => $tables,
+            'selectedTable' => $selectedTable,
+            'tableColumns' => $tableColumns,
         ]);
     }
 

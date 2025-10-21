@@ -10,17 +10,30 @@ class ChatControllerTest extends TestCase
 {
     public function test_index_loads_empty_conversation(): void
     {
-        $this->mock(DatabaseAwareChatService::class)
-            ->shouldReceive('availableSchemas')
+        $service = $this->mock(DatabaseAwareChatService::class);
+        $service->shouldReceive('availableSchemas')
             ->once()
             ->andReturn(['public', 'ventas']);
+        $service->shouldReceive('availableTables')
+            ->once()
+            ->with('public')
+            ->andReturn(['clientes']);
+        $service->shouldReceive('columnsForTable')
+            ->once()
+            ->with('public', 'clientes')
+            ->andReturn([
+                ['name' => 'id', 'type' => 'integer', 'nullable' => false, 'default' => null],
+            ]);
 
         $response = $this->get('/');
 
         $response->assertStatus(200);
         $response->assertSee('Describe la información que necesitas');
         $response->assertSee('Esquema');
+        $response->assertSee('Tabla');
         $response->assertSee('ventas');
+        $response->assertSee('Columnas de clientes');
+        $response->assertSee('id');
     }
 
     public function test_send_uses_selected_schema_and_persists_conversation(): void
@@ -49,6 +62,32 @@ class ChatControllerTest extends TestCase
 
         $conversation = session('chat.conversation');
         $this->assertSame('Respuesta generada', $conversation[1]['content']);
+    }
+
+    public function test_index_allows_selecting_schema_and_table_via_query(): void
+    {
+        $service = $this->mock(DatabaseAwareChatService::class);
+        $service->shouldReceive('availableSchemas')
+            ->once()
+            ->andReturn(['public', 'ventas']);
+        $service->shouldReceive('availableTables')
+            ->once()
+            ->with('ventas')
+            ->andReturn(['facturas', 'clientes']);
+        $service->shouldReceive('columnsForTable')
+            ->once()
+            ->with('ventas', 'facturas')
+            ->andReturn([
+                ['name' => 'numero', 'type' => 'text', 'nullable' => false, 'default' => null],
+            ]);
+
+        $response = $this->get('/?schema=ventas&table=facturas');
+
+        $response->assertStatus(200);
+        $response->assertSee('Columnas de facturas');
+        $response->assertSee('numero');
+        $response->assertSessionHas('chat.schema', 'ventas');
+        $response->assertSessionHas('chat.table', 'facturas');
     }
 
     public function test_reset_clears_conversation_and_schema(): void

@@ -78,11 +78,38 @@ class DatabaseAwareChatService
         }
     }
 
+    public function availableTables(string $schema): array
+    {
+        return $this->fetchTablesForSchema($schema);
+    }
+
+    public function columnsForTable(string $schema, string $table): array
+    {
+        return $this->fetchColumnsForTable($schema, $table);
+    }
+
     private function buildSystemPrompt(string $schema): string
     {
-        $tablesList = collect($this->fetchTablesForSchema($schema))
-            ->map(fn ($table) => "- {$table}")
-            ->implode("\n");
+        $tables = collect($this->fetchTablesForSchema($schema));
+
+        $tablesList = $tables->map(function (string $table) use ($schema) {
+            $columns = collect($this->fetchColumnsForTable($schema, $table));
+
+            if ($columns->isEmpty()) {
+                return "- {$table} (sin columnas detectadas)";
+            }
+
+            $columnList = $columns->map(function (array $column) {
+                $nullability = $column['nullable'] ? 'NULL' : 'NOT NULL';
+                $default = $column['default'] !== null
+                    ? " (por defecto: {$column['default']})"
+                    : '';
+
+                return "    - {$column['name']} ({$column['type']}, {$nullability}{$default})";
+            })->implode("\n");
+
+            return "- {$table}\n{$columnList}";
+        })->implode("\n");
 
         if ($tablesList === '') {
             $tablesList = '- (sin tablas detectadas)';
@@ -145,6 +172,35 @@ PROMPT;
         } catch (Throwable $exception) {
             Log::warning('Failed to fetch tables for schema', [
                 'schema' => $schema,
+                'exception' => $exception,
+            ]);
+
+            return [];
+        }
+    }
+
+    private function fetchColumnsForTable(string $schema, string $table): array
+    {
+        try {
+            $columns = $this->connection->select(
+                'SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position',
+                [$schema, $table]
+            );
+
+            return collect($columns)->map(function ($column) {
+                $columnArray = (array) $column;
+
+                return [
+                    'name' => $columnArray['column_name'] ?? '',
+                    'type' => $columnArray['data_type'] ?? '',
+                    'nullable' => ($columnArray['is_nullable'] ?? 'NO') === 'YES',
+                    'default' => $columnArray['column_default'] ?? null,
+                ];
+            })->all();
+        } catch (Throwable $exception) {
+            Log::warning('Failed to fetch columns for table', [
+                'schema' => $schema,
+                'table' => $table,
                 'exception' => $exception,
             ]);
 
