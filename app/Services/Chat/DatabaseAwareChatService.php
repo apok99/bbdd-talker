@@ -2,7 +2,7 @@
 
 namespace App\Services\Chat;
 
-use Illuminate\Contracts\Database\Connection;
+use Illuminate\Database\ConnectionInterface;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Http;
@@ -10,7 +10,7 @@ use Illuminate\Support\Str;
 
 class DatabaseAwareChatService
 {
-    public function __construct(private readonly Connection $connection)
+    public function __construct(private readonly ConnectionInterface $connection)
     {
     }
 
