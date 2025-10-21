@@ -10,12 +10,18 @@
         @empty
             <article class="message assistant">
                 <strong>Asistente</strong>
-                <div>¡Hola! Soy tu copiloto para bases de datos PostgreSQL. Describe la consulta que necesitas y me encargaré de generar y ejecutar el SQL por ti.</div>
+                <div>¡Hola! Soy tu copiloto para bases de datos PostgreSQL. Selecciona el esquema con el que quieres trabajar, describe la consulta que necesitas y me encargaré de generar y ejecutar el SQL por ti.</div>
             </article>
         @endforelse
     </section>
     <form action="{{ route('chat.send') }}" method="POST">
         @csrf
+        <label for="schema">Esquema</label>
+        <select id="schema" name="schema">
+            @foreach($schemas as $schemaOption)
+                <option value="{{ $schemaOption }}" @selected(old('schema', $selectedSchema) === $schemaOption)>{{ $schemaOption }}</option>
+            @endforeach
+        </select>
         <label for="message">Mensaje</label>
         <textarea id="message" name="message" placeholder="Describe la información que necesitas obtener de la base de datos" required>{{ old('message') }}</textarea>
         <div class="actions">

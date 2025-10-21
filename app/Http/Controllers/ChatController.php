@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Services\Chat\DatabaseAwareChatService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Log;
 use Illuminate\View\View;
 
@@ -18,8 +19,15 @@ class ChatController extends Controller
     {
         $conversation = $request->session()->get('chat.conversation', []);
 
+        $selectedSchema = $request->session()->get(
+            'chat.schema',
+            Config::get('services.ollama.database_schema', 'public')
+        );
+
         return view('chat', [
             'conversation' => $conversation,
+            'schemas' => $this->chatService->availableSchemas(),
+            'selectedSchema' => $selectedSchema,
         ]);
     }
 
@@ -27,6 +35,7 @@ class ChatController extends Controller
     {
         $validated = $request->validate([
             'message' => ['required', 'string'],
+            'schema' => ['nullable', 'string'],
         ]);
 
         $conversation = $request->session()->get('chat.conversation', []);
@@ -35,8 +44,19 @@ class ChatController extends Controller
             'content' => $validated['message'],
         ];
 
+        $availableSchemas = $this->chatService->availableSchemas();
+
+        $schema = $validated['schema']
+            ?: Config::get('services.ollama.database_schema', 'public');
+
+        if (! in_array($schema, $availableSchemas, true)) {
+            $schema = Config::get('services.ollama.database_schema', 'public');
+        }
+
+        $request->session()->put('chat.schema', $schema);
+
         try {
-            $reply = $this->chatService->reply($validated['message'], $conversation);
+            $reply = $this->chatService->reply($validated['message'], $conversation, $schema);
 
             $conversation[] = [
                 'role' => 'assistant',
@@ -59,7 +79,7 @@ class ChatController extends Controller
 
     public function reset(Request $request): RedirectResponse
     {
-        $request->session()->forget('chat.conversation');
+        $request->session()->forget(['chat.conversation', 'chat.schema']);
 
         return back();
     }

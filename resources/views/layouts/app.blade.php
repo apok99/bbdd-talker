@@ -78,6 +78,9 @@
             display: grid;
             gap: 0.75rem;
         }
+        label {
+            font-weight: 600;
+        }
         textarea {
             width: 100%;
             min-height: 120px;
@@ -88,6 +91,24 @@
             resize: vertical;
         }
         textarea:focus {
+            outline: none;
+            border-color: #2563eb;
+            box-shadow: 0 0 0 3px rgba(37,99,235,0.2);
+        }
+        select {
+            width: 100%;
+            border-radius: 0.75rem;
+            border: 1px solid rgba(15,23,42,0.1);
+            padding: 0.75rem 1rem;
+            font: inherit;
+            background: #fff;
+        }
+        body.dark select {
+            background: rgba(15,23,42,0.7);
+            color: inherit;
+            border-color: rgba(148,163,184,0.2);
+        }
+        select:focus {
             outline: none;
             border-color: #2563eb;
             box-shadow: 0 0 0 3px rgba(37,99,235,0.2);

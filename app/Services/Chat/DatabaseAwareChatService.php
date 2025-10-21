@@ -6,7 +6,9 @@ use Illuminate\Database\ConnectionInterface;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Throwable;
 
 class DatabaseAwareChatService
 {
@@ -14,9 +16,9 @@ class DatabaseAwareChatService
     {
     }
 
-    public function reply(string $prompt, array $history): string
+    public function reply(string $prompt, array $history, string $schema): string
     {
-        $systemPrompt = $this->buildSystemPrompt();
+        $systemPrompt = $this->buildSystemPrompt($schema);
 
         $messages = collect($history)
             ->map(fn (array $message) => [
@@ -52,13 +54,33 @@ class DatabaseAwareChatService
         return $answer;
     }
 
-    private function buildSystemPrompt(): string
+    public function availableSchemas(): array
     {
-        $schema = Config::get('services.ollama.database_schema', 'public');
-        $tables = $this->connection->select("SELECT table_name FROM information_schema.tables WHERE table_schema = ?", [$schema]);
+        $defaultSchema = Config::get('services.ollama.database_schema', 'public');
 
-        $tablesList = collect($tables)
-            ->pluck('table_name')
+        try {
+            $schemas = $this->connection->select(
+                "SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT LIKE 'pg_%' AND schema_name <> 'information_schema' ORDER BY schema_name"
+            );
+
+            return collect($schemas)
+                ->pluck('schema_name')
+                ->push($defaultSchema)
+                ->unique()
+                ->values()
+                ->all();
+        } catch (Throwable $exception) {
+            Log::warning('Failed to fetch database schemas', [
+                'exception' => $exception,
+            ]);
+
+            return [$defaultSchema];
+        }
+    }
+
+    private function buildSystemPrompt(string $schema): string
+    {
+        $tablesList = collect($this->fetchTablesForSchema($schema))
             ->map(fn ($table) => "- {$table}")
             ->implode("\n");
 
@@ -106,5 +128,27 @@ PROMPT;
         $separator = '|'.collect($headers)->map(fn ($column) => str_repeat('-', strlen($column) + 2))->implode('|').'|';
 
         return implode("\n", [$headerRow, $separator, ...$rows]);
+    }
+
+    private function fetchTablesForSchema(string $schema): array
+    {
+        try {
+            $tables = $this->connection->select(
+                'SELECT table_name FROM information_schema.tables WHERE table_schema = ? ORDER BY table_name',
+                [$schema]
+            );
+
+            return collect($tables)
+                ->pluck('table_name')
+                ->values()
+                ->all();
+        } catch (Throwable $exception) {
+            Log::warning('Failed to fetch tables for schema', [
+                'schema' => $schema,
+                'exception' => $exception,
+            ]);
+
+            return [];
+        }
     }
 }
