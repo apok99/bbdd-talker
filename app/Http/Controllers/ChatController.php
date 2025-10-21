@@ -18,8 +18,59 @@ class ChatController extends Controller
     {
         $conversation = $request->session()->get('chat.conversation', []);
 
+        $availableDatabases = $this->chatService->availableDatabases();
+        $defaultDatabase = $this->chatService->defaultDatabase();
+
+        if (! array_key_exists($defaultDatabase, $availableDatabases)) {
+            $defaultDatabase = array_key_first($availableDatabases) ?? $defaultDatabase;
+        }
+
+        $selectedDatabase = $request->query('database', $request->session()->get('chat.database', $defaultDatabase));
+
+        if (! array_key_exists($selectedDatabase, $availableDatabases)) {
+            $selectedDatabase = $defaultDatabase;
+        }
+
+        $request->session()->put('chat.database', $selectedDatabase);
+
+        $availableSchemas = $this->chatService->availableSchemas($selectedDatabase);
+        $defaultSchema = $this->chatService->defaultSchema();
+
+        $selectedSchema = $request->query('schema', $request->session()->get('chat.schema', $defaultSchema));
+
+        if (! in_array($selectedSchema, $availableSchemas, true)) {
+            $selectedSchema = $defaultSchema;
+        }
+
+        $request->session()->put('chat.schema', $selectedSchema);
+
+        $tables = $this->chatService->availableTables($selectedDatabase, $selectedSchema);
+
+        $selectedTable = $request->query('table', $request->session()->get('chat.table'));
+
+        if (! in_array($selectedTable, $tables, true)) {
+            $selectedTable = $tables[0] ?? null;
+        }
+
+        if ($selectedTable !== null) {
+            $request->session()->put('chat.table', $selectedTable);
+        } else {
+            $request->session()->forget('chat.table');
+        }
+
+        $tableColumns = $selectedTable
+            ? $this->chatService->columnsForTable($selectedDatabase, $selectedSchema, $selectedTable)
+            : [];
+
         return view('chat', [
             'conversation' => $conversation,
+            'databases' => $availableDatabases,
+            'selectedDatabase' => $selectedDatabase,
+            'schemas' => $availableSchemas,
+            'selectedSchema' => $selectedSchema,
+            'tables' => $tables,
+            'selectedTable' => $selectedTable,
+            'tableColumns' => $tableColumns,
         ]);
     }
 
@@ -27,6 +78,8 @@ class ChatController extends Controller
     {
         $validated = $request->validate([
             'message' => ['required', 'string'],
+            'database' => ['nullable', 'string'],
+            'schema' => ['nullable', 'string'],
         ]);
 
         $conversation = $request->session()->get('chat.conversation', []);
@@ -35,8 +88,34 @@ class ChatController extends Controller
             'content' => $validated['message'],
         ];
 
+        $availableDatabases = $this->chatService->availableDatabases();
+        $defaultDatabase = $this->chatService->defaultDatabase();
+
+        if (! array_key_exists($defaultDatabase, $availableDatabases)) {
+            $defaultDatabase = array_key_first($availableDatabases) ?? $defaultDatabase;
+        }
+
+        $database = $validated['database'] ?: $defaultDatabase;
+
+        if (! array_key_exists($database, $availableDatabases)) {
+            $database = $defaultDatabase;
+        }
+
+        $request->session()->put('chat.database', $database);
+
+        $availableSchemas = $this->chatService->availableSchemas($database);
+
+        $schema = $validated['schema']
+            ?: $this->chatService->defaultSchema();
+
+        if (! in_array($schema, $availableSchemas, true)) {
+            $schema = $this->chatService->defaultSchema();
+        }
+
+        $request->session()->put('chat.schema', $schema);
+
         try {
-            $reply = $this->chatService->reply($validated['message'], $conversation);
+            $reply = $this->chatService->reply($validated['message'], $conversation, $database, $schema);
 
             $conversation[] = [
                 'role' => 'assistant',
@@ -59,7 +138,7 @@ class ChatController extends Controller
 
     public function reset(Request $request): RedirectResponse
     {
-        $request->session()->forget('chat.conversation');
+        $request->session()->forget(['chat.conversation', 'chat.schema', 'chat.database', 'chat.table']);
 
         return back();
     }
